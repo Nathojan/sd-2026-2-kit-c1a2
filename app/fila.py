@@ -12,7 +12,9 @@ import redis
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 FILA_TAREFAS = "tarefas"
+FILA_DEAD_LETTER = "dead_letter"
 PREFIXO_RESULTADO = "resultado:"
+PREFIXO_TENTATIVA = "tentativa:"
 
 _cliente = None
 
@@ -28,8 +30,11 @@ def enfileirar(texto: str) -> str:
     """Coloca uma tarefa na fila e devolve o id para consulta posterior."""
     tarefa_id = str(uuid.uuid4())
     cliente().rpush(FILA_TAREFAS, json.dumps({"id": tarefa_id, "texto": texto}))
-    cliente().set(PREFIXO_RESULTADO + tarefa_id,
-                  json.dumps({"status": "na_fila"}))
+    cliente().set(
+        PREFIXO_RESULTADO + tarefa_id,
+        json.dumps({"status": "queued", "task_id": tarefa_id, "resultado": None}),
+    )
+    cliente().delete(PREFIXO_TENTATIVA + tarefa_id)
     return tarefa_id
 
 
@@ -41,8 +46,32 @@ def proxima_tarefa(timeout: int = 5):
     return json.loads(item[1])
 
 
+def incrementar_tentativa(tarefa_id: str) -> int:
+    """Aumenta o contador de tentativas da tarefa."""
+    return int(cliente().incr(PREFIXO_TENTATIVA + tarefa_id))
+
+
 def guardar_resultado(tarefa_id: str, resultado: dict) -> None:
     cliente().set(PREFIXO_RESULTADO + tarefa_id, json.dumps(resultado))
+
+
+def guardar_dead_letter(tarefa_id: str, erro: str, detalhes: dict | None = None) -> None:
+    payload = {
+        "task_id": tarefa_id,
+        "erro": erro,
+        "detalhes": detalhes or {},
+    }
+    cliente().rpush(FILA_DEAD_LETTER, json.dumps(payload))
+    guardar_resultado(
+        tarefa_id,
+        {
+            "status": "dead_letter",
+            "task_id": tarefa_id,
+            "resultado": None,
+            "erro": erro,
+            "detalhes": detalhes or {},
+        },
+    )
 
 
 def buscar_resultado(tarefa_id: str):
