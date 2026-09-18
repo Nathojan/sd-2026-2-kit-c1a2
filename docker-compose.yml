@@ -1,6 +1,7 @@
 services:
   redis:
     image: redis:7-alpine
+    container_name: inferencia-redis
     ports:
       - "6379:6379"
     healthcheck:
@@ -8,3 +9,39 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
+
+  rest:
+    build: .
+    container_name: inferencia-rest
+    command: >
+      bash -lc "python -m grpc_tools.protoc -I proto --python_out=. --grpc_python_out=. proto/inferencia.proto && uvicorn app.api_rest:app --host 0.0.0.0 --port 8000"
+    ports:
+      - "8000:8000"
+    environment:
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  worker:
+    build: .
+    container_name: inferencia-worker
+    command: python -m app.worker
+    environment:
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  grpc:
+    build: .
+    container_name: inferencia-grpc
+    command: >
+      bash -lc "python -m grpc_tools.protoc -I proto --python_out=. --grpc_python_out=. proto/inferencia.proto && python -m app.servidor_grpc"
+    ports:
+      - "50051:50051"
+    environment:
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
